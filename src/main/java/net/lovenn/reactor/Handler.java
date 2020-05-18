@@ -1,10 +1,12 @@
 package net.lovenn.reactor;
 
+import javax.annotation.processing.Processor;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.*;
 
 public class Handler implements Runnable {
 
@@ -16,8 +18,12 @@ public class Handler implements Runnable {
 
     ByteBuffer input = ByteBuffer.allocate(MAXIN);
     ByteBuffer output = ByteBuffer.allocate(MAXOUT);
-    static final int READING = 0, SENDING = 1;
+    static final int READING = 0, SENDING = 1, PROCESSING = 3;
     int state = READING;
+
+    static ThreadPoolExecutor pool = new ThreadPoolExecutor(10, 10,
+                                      0L,TimeUnit.MILLISECONDS,
+                                      new LinkedBlockingQueue<Runnable>());
 
     public Handler(Selector selector, SocketChannel sc) throws IOException {
         this.sc = sc;
@@ -38,16 +44,15 @@ public class Handler implements Runnable {
         }
     }
 
-    void read() throws IOException {
+    synchronized void read() throws IOException {
         sc.read(input);
         if (inputIsComplete()) {
-            process();
-            state = SENDING;
-            sk.interestOps(SelectionKey.OP_WRITE);
+            state = PROCESSING;
+            pool.execute(new Processor());
         }
     }
 
-    void send() throws IOException {
+    synchronized void send() throws IOException {
         sc.write(output);
         if (outputIsComplete()) {
             sk.cancel();
@@ -63,4 +68,18 @@ public class Handler implements Runnable {
     }
 
     private void process() { /* ... */ }
+
+    synchronized void processAndHandOff() {
+        process();
+        state = SENDING; // or rebind attachment
+        sk.interestOps(SelectionKey.OP_WRITE);
+    }
+
+    public class Processor implements Runnable{
+
+        @Override
+        public void run() {
+            processAndHandOff();
+        }
+    }
 }
